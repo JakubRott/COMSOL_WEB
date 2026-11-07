@@ -1,0 +1,684 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>COMSOL monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<!--
+  Page for plot_convergence.py. It contains NO data: everything comes from status.js, which the
+  monitor rewrites every few seconds. This file is copied next to status.js (and by git_publish.py to
+  GitHub as index.html), so you can restyle it here freely. Clocks tick in the browser every second
+  and are re-anchored whenever new data arrives, so nothing jumps or freezes between updates.
+-->
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f3f3f1;  --surface: #fcfcfb;  --line: #e2e1dc;  --grid: #ecebe7;  --axis: #cdccc6;
+    --ink: #0b0b0b; --ink2: #52514e;     --muted: #7d7c76;
+    --s1: #2a78d6;  --s2: #eb6834;       --s3: #1baf7a;
+    --good: #0ca30c; --warn: #b87d00;    --crit: #d03b3b;   --run: #2a78d6;
+    --track: #cde2fb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --bg: #121211;  --surface: #1a1a19;  --line: #2d2d2b;  --grid: #262624;  --axis: #3c3c39;
+      --ink: #f0efec; --ink2: #c3c2b7;     --muted: #8f8e87;
+      --s1: #3987e5;  --s2: #d95926;       --s3: #199e70;
+      --good: #0ca30c; --warn: #fab219;    --crit: #e66767;   --run: #3987e5;
+      --track: #1d3a5f;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #121211;  --surface: #1a1a19;  --line: #2d2d2b;  --grid: #262624;  --axis: #3c3c39;
+    --ink: #f0efec; --ink2: #c3c2b7;     --muted: #8f8e87;
+    --s1: #3987e5;  --s2: #d95926;       --s3: #199e70;
+    --good: #0ca30c; --warn: #fab219;    --crit: #e66767;   --run: #3987e5;
+    --track: #1d3a5f;
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.45 "IBM Plex Sans", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  }
+  button { font: inherit; color: inherit; }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 0 20px 40px; }
+
+  /* ---- top bar ---- */
+  .top { display: flex; align-items: center; gap: 16px; padding: 18px 0 14px; flex-wrap: wrap; }
+  .top h1 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -0.01em; }
+  .top .file { color: var(--muted); font-size: 14px; margin-left: 10px; font-weight: 400; }
+  .top .spacer { flex: 1; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px 5px 10px;
+    border: 1px solid var(--line); border-radius: 999px; background: var(--surface);
+    font-weight: 500; font-size: 14px;
+  }
+  .pill .ic { width: 16px; text-align: center; font-size: 13px; line-height: 1; }
+  .pill[data-state="run"]  .ic { color: var(--run); }
+  .pill[data-state="ok"]   .ic { color: var(--good); }
+  .pill[data-state="warn"] .ic { color: var(--warn); }
+  .pill[data-state="bad"]  .ic { color: var(--crit); }
+  .pill[data-state="run"] .ic { animation: beat 2s ease-in-out infinite; }
+  @keyframes beat { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+  @media (prefers-reduced-motion: reduce) { .pill[data-state="run"] .ic { animation: none; } }
+  .iconbtn {
+    border: 1px solid var(--line); background: var(--surface); border-radius: 8px;
+    min-width: 36px; height: 36px; padding: 0 10px; cursor: pointer; color: var(--ink2);
+  }
+  .iconbtn:hover { color: var(--ink); border-color: var(--axis); }
+  :focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
+
+  /* ---- alerts ---- */
+  #alerts:empty { display: none; }
+  #alerts { display: grid; gap: 8px; margin-bottom: 14px; }
+  .alert {
+    display: flex; gap: 10px; align-items: baseline; padding: 10px 14px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--surface); font-size: 14px;
+  }
+  .alert b { font-weight: 600; }
+  .alert[data-kind="warn"] { border-color: var(--warn); }
+  .alert[data-kind="bad"]  { border-color: var(--crit); }
+
+  /* ---- sheet = the main surface ---- */
+  .sheet { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+
+  /* ---- hero ---- */
+  .hero { display: grid; grid-template-columns: minmax(280px, 5fr) 7fr; }
+  .hero > div { padding: 26px 30px 24px; }
+  .clock { border-right: 1px solid var(--line); }
+  .clock-label { color: var(--ink2); font-size: 14px; margin-bottom: 2px; }
+  .clock-value {
+    font-size: 64px; line-height: 1.05; font-weight: 600; letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;           /* digits keep their width, so the ticking clock does not wobble */
+    white-space: nowrap;
+  }
+  .clock-value.dim { color: var(--muted); }
+  .clock-sub { color: var(--ink2); margin-top: 8px; font-size: 14px; min-height: 1.45em; }
+  .clock-sub small { color: var(--muted); font-size: 13px; }
+  .pct { display: flex; align-items: baseline; gap: 4px; }
+  .pct .num { font-size: 34px; font-weight: 600; letter-spacing: -0.01em; }
+  .pct .unit { font-size: 18px; color: var(--ink2); }
+  .pct .exact { margin-left: auto; color: var(--muted); font-size: 13px; }
+  .bar { height: 12px; border-radius: 6px; background: var(--track); overflow: hidden; margin: 10px 0 14px; }
+  .bar > i { display: block; height: 100%; width: 0; border-radius: 6px; background: var(--run); transition: width .6s ease; }
+  .bar[data-state="ok"] > i   { background: var(--good); }
+  .bar[data-state="warn"] > i { background: var(--warn); }
+  .bar[data-state="bad"] > i  { background: var(--crit); }
+  .runtimes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 24px; font-size: 14px; }
+  .runtimes dt { color: var(--ink2); }
+  .runtimes dd { margin: 0; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .runtimes div { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); padding: 4px 0; }
+  .runtimes .full { grid-column: 1 / -1; }
+
+  /* ---- facts ---- */
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); border-top: 1px solid var(--line); }
+  .fact { padding: 14px 24px 16px; border-left: 1px solid var(--line); min-width: 0; }
+  .fact:first-child { border-left: 0; }
+  .fact .l { color: var(--ink2); font-size: 13px; }
+  .fact .v { font-size: 20px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .fact .s { color: var(--muted); font-size: 13px; margin-top: 1px; overflow-wrap: anywhere; }
+
+  /* ---- study steps ---- */
+  .steps { border-top: 1px solid var(--line); padding: 14px 24px 16px; }
+  .steps h2, .section-title { margin: 0 0 8px; font-size: 14px; font-weight: 600; color: var(--ink2); }
+  .steps ul { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 2px 28px; }
+  .steps li { display: flex; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 14px; align-items: baseline; }
+  .steps .mark { width: 16px; text-align: center; flex: none; }
+  .steps .mark.run { color: var(--run); } .steps .mark.ok { color: var(--good); }
+  .steps .nm { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .steps .tm { color: var(--muted); font-size: 12.5px; text-align: right; }
+
+  /* ---- plots ---- */
+  .plots { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 14px; margin-top: 16px; }
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px 10px; min-width: 0; }
+  .panel header { display: flex; align-items: center; gap: 8px; }
+  .panel h3 { margin: 0; font-size: 15px; font-weight: 600; flex: 1; }
+  .hint { margin: 2px 0 6px; color: var(--ink2); font-size: 13px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 2px 0 4px; font-size: 13px; color: var(--ink2); }
+  .legend .key { display: inline-block; width: 16px; height: 0; border-top: 2px solid var(--c); margin-right: 7px; vertical-align: middle; border-radius: 2px; }
+  .plot { position: relative; height: 240px; cursor: zoom-in; }
+  .plot.big { height: min(62vh, 560px); cursor: default; }
+  .plot svg { display: block; width: 100%; height: 100%; overflow: visible; }
+  .plot .empty { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; color: var(--muted); font-size: 13px; padding: 0 24px; }
+  .tick { fill: var(--ink2); font-size: 11.5px; font-family: inherit; }
+  .axtitle { fill: var(--muted); font-size: 11.5px; font-family: inherit; }
+  .endlbl { fill: var(--ink); font-size: 11.5px; font-weight: 500; }
+  .tip {
+    position: absolute; pointer-events: none; z-index: 3; min-width: 150px; max-width: 260px;
+    background: var(--surface); border: 1px solid var(--axis); border-radius: 8px;
+    padding: 8px 10px; font-size: 12.5px; box-shadow: 0 4px 14px rgba(0,0,0,.12);
+  }
+  .tip .t { color: var(--ink2); margin-bottom: 4px; }
+  .tip .r { display: flex; align-items: baseline; gap: 8px; }
+  .tip .r i { width: 12px; border-top: 2px solid var(--c); flex: none; transform: translateY(-3px); }
+  .tip .r b { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tip .r span { color: var(--ink2); }
+
+  /* ---- modal ---- */
+  .modal { position: fixed; inset: 0; z-index: 10; background: rgba(8,8,8,.55); display: grid; place-items: center; padding: 18px; }
+  .modal[hidden] { display: none; }
+  .modal-box { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; width: min(1100px, 100%); max-height: 100%; overflow: auto; padding: 16px 20px 18px; }
+  .modal-box header { display: flex; align-items: center; gap: 8px; }
+  .modal-box h2 { margin: 0; font-size: 18px; font-weight: 600; flex: 1; }
+  .tablewrap { max-height: 46vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; margin-top: 10px; }
+  .tablewrap table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
+  .tablewrap th, .tablewrap td { text-align: right; padding: 4px 12px; border-bottom: 1px solid var(--line); }
+  .tablewrap th { position: sticky; top: 0; background: var(--surface); font-weight: 600; }
+  body.noscroll { overflow: hidden; }
+
+  .foot { margin-top: 18px; color: var(--muted); font-size: 12.5px; }
+
+  @media (max-width: 860px) {
+    .hero { grid-template-columns: 1fr; }
+    .clock { border-right: 0; border-bottom: 1px solid var(--line); }
+    .hero > div { padding: 20px 20px 18px; }
+    .clock-value { font-size: 52px; }
+    .facts .fact { padding: 12px 16px; }
+    .steps { padding: 12px 16px 14px; }
+  }
+  @media (max-width: 520px) {
+    .wrap { padding: 0 12px 32px; }
+    .plots { grid-template-columns: 1fr; }
+    .runtimes { grid-template-columns: 1fr; }
+    .fact { border-left: 0; border-top: 1px solid var(--line); }
+    .fact:first-child { border-top: 0; }
+  }
+</style>
+<script src="status.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <h1><span id="run-title">COMSOL run</span><span class="file" id="run-file"></span></h1>
+    <div class="spacer"></div>
+    <div class="pill" id="pill" data-state="run" role="status"><span class="ic" aria-hidden="true">●</span><span id="pill-text">Waiting for data</span></div>
+    <button class="iconbtn" id="theme" type="button" title="Switch light / dark" aria-label="Switch light or dark theme">Theme</button>
+  </div>
+
+  <div id="alerts"></div>
+
+  <div class="sheet">
+    <section class="hero" aria-label="Time and progress">
+      <div class="clock">
+        <div class="clock-label" id="clock-label">Remaining</div>
+        <div class="clock-value" id="clock-value">–:––:––</div>
+        <div class="clock-sub" id="clock-sub"></div>
+      </div>
+      <div>
+        <div class="pct"><span class="num" id="pct-num">0</span><span class="unit">%</span><span class="exact" id="pct-exact"></span></div>
+        <div class="bar" id="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" data-state="run"><i id="bar-fill"></i></div>
+        <dl class="runtimes">
+          <div><dt>Running for</dt><dd id="rt-elapsed">–</dd></div>
+          <div><dt>Log last written</dt><dd id="rt-log">–</dd></div>
+          <div class="full"><dt>Current activity</dt><dd id="rt-activity">–</dd></div>
+        </dl>
+      </div>
+    </section>
+    <section class="facts" id="facts" aria-label="Key numbers"></section>
+    <section class="steps" aria-label="Study steps">
+      <h2>Study steps</h2>
+      <ul id="steps"></ul>
+    </section>
+  </div>
+
+  <section class="plots" id="plots" aria-label="Graphs"></section>
+  <p class="foot" id="foot"></p>
+</div>
+
+<div class="modal" id="modal" hidden role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <div class="modal-box">
+    <header>
+      <h2 id="modal-title"></h2>
+      <button class="iconbtn" id="m-table" type="button">Table</button>
+      <button class="iconbtn" id="m-csv" type="button">CSV</button>
+      <button class="iconbtn" id="m-close" type="button" aria-label="Close">✕</button>
+    </header>
+    <p class="hint" id="modal-hint"></p>
+    <div class="legend" id="modal-legend"></div>
+    <div class="plot big" id="modal-plot" tabindex="0"></div>
+    <div class="tablewrap" id="modal-table" hidden></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ================= helpers ================= */
+  var $ = function (s, r) { return (r || document).querySelector(s); };
+  function h(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  var NS = 'http://www.w3.org/2000/svg';
+  function sv(tag, attrs, text) {
+    var e = document.createElementNS(NS, tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (text != null) e.textContent = text;
+    return e;
+  }
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function hms(sec) {
+    sec = Math.max(0, Math.floor(sec));
+    return Math.floor(sec / 3600) + ':' + pad2(Math.floor(sec % 3600 / 60)) + ':' + pad2(sec % 60);
+  }
+  function ago(sec) {
+    sec = Math.max(0, Math.floor(sec));
+    if (sec < 90) return sec + ' s';
+    if (sec < 5400) return Math.floor(sec / 60) + ' min ' + pad2(sec % 60) + ' s';
+    return Math.floor(sec / 3600) + ' h ' + pad2(Math.floor(sec % 3600 / 60)) + ' min';
+  }
+  function fmtNum(v) {
+    if (v === 0) return '0';
+    var a = Math.abs(v);
+    if (a >= 1e5 || a < 1e-3) return v.toExponential(2).replace('e+', 'e').replace(/\.?0+e/, 'e');
+    return String(+v.toPrecision(3));
+  }
+  function fmtInt(v) { return Math.round(v).toLocaleString(); }
+  function fmtDate(epoch) {
+    return new Date(epoch * 1000).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  }
+  function storeGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function storeSet(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* private mode */ } }
+  function median(a) { var s = a.slice().sort(function (x, y) { return x - y; }); return s.length ? s[Math.floor(s.length / 2)] : 0; }
+
+  /* ================= state ================= */
+  var S = window.__STATUS || null;
+  var failedPolls = 0;
+  var STATE = {
+    run:  { label: 'Running',         icon: '●' },
+    ok:   { label: 'Finished',        icon: '✓' },
+    warn: { label: 'No log activity', icon: '▲' },
+    bad:  { label: 'Stopped',         icon: '✕' }
+  };
+
+  /* ================= charts ================= */
+  function niceStep(range, n) {
+    var raw = range / n, p = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / p;
+    return (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) * p;
+  }
+  function linTicks(a, b, n) {
+    var st = niceStep(b - a, n), out = [];
+    for (var v = Math.ceil(a / st - 1e-9) * st; v <= b + st * 1e-9; v += st) out.push(+v.toPrecision(12));
+    return out;
+  }
+  function logTicks(a, b) {
+    var ea = Math.round(Math.log10(a)), eb = Math.round(Math.log10(b)), step = Math.max(1, Math.ceil((eb - ea) / 6)), out = [];
+    for (var e = ea; e <= eb; e += step) out.push(e);
+    return out;
+  }
+  function nearest(pts, x) {          // index of the point whose x is closest (pts sorted by x)
+    var lo = 0, hi = pts.length - 1;
+    while (hi - lo > 1) { var mid = (lo + hi) >> 1; if (pts[mid][0] < x) lo = mid; else hi = mid; }
+    return Math.abs(pts[lo][0] - x) <= Math.abs(pts[hi][0] - x) ? lo : hi;
+  }
+
+  function drawChart(host, big) {
+    var spec = host.__spec;
+    host.textContent = '';
+    if (!spec) return;
+    var series = (spec.series || []).filter(function (s) { return s.pts && s.pts.length; });
+    if (!series.length) { host.appendChild(h('div', 'empty', spec.empty || 'No data yet')); return; }
+
+    var W = host.clientWidth, H = host.clientHeight;
+    if (W < 80 || H < 80) return;
+    var m = { l: 58, r: big ? 64 : 52, t: 12, b: 38 };
+    var pw = W - m.l - m.r, ph = H - m.t - m.b;
+    var isLog = spec.yscale === 'log';
+
+    // ---- domains ----
+    var xmin = Infinity, xmax = -Infinity, all = [];
+    series.forEach(function (s) { s.pts.forEach(function (p) { if (p[0] < xmin) xmin = p[0]; if (p[0] > xmax) xmax = p[0]; if (isFinite(p[1]) && (!isLog || p[1] > 0)) all.push(p[1]); }); });
+    if (!all.length) { host.appendChild(h('div', 'empty', spec.empty || 'No data yet')); return; }
+    if (xmin === xmax) { xmin -= 1; xmax += 1; }
+    var core = all;
+    if (spec.clip && all.length > 2) {                     // values that dwarf everything else are drawn at the edge
+      var med = median(all);
+      core = all.filter(function (v) { return v <= med * 1e4; });
+      if (!core.length) core = all;
+    }
+    var ymin = Math.min.apply(null, core), ymax = Math.max.apply(null, core), yTicks, ylo, yhi;
+    if (isLog) {
+      ylo = Math.pow(10, Math.floor(Math.log10(ymin) - 1e-9)); yhi = Math.pow(10, Math.ceil(Math.log10(ymax) + 1e-9));
+      if (yhi <= ylo) yhi = ylo * 10;
+      yTicks = logTicks(ylo, yhi).map(function (e) { return { v: Math.pow(10, e), e: e }; });
+    } else {
+      ylo = spec.zero === false ? ymin : Math.min(0, ymin); yhi = ymax <= ylo ? ylo + 1 : ymax + (ymax - ylo) * 0.08;
+      yTicks = linTicks(ylo, yhi, 5).map(function (v) { return { v: v }; });
+      yhi = Math.max(yhi, yTicks[yTicks.length - 1].v);
+    }
+    var sx = function (x) { return m.l + (x - xmin) / (xmax - xmin) * pw; };
+    var sy = isLog
+      ? function (y) { var c = Math.min(Math.max(y, ylo), yhi); return m.t + ph - (Math.log10(c) - Math.log10(ylo)) / (Math.log10(yhi) - Math.log10(ylo)) * ph; }
+      : function (y) { var c = Math.min(Math.max(y, ylo), yhi); return m.t + ph - (c - ylo) / (yhi - ylo) * ph; };
+
+    var svg = sv('svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'aria-label': spec.title });
+    host.appendChild(svg);
+
+    // ---- grid and axes (hairline, solid, recessive) ----
+    yTicks.forEach(function (t) {
+      var y = sy(t.v);
+      svg.appendChild(sv('line', { x1: m.l, x2: m.l + pw, y1: y, y2: y, stroke: 'var(--grid)', 'stroke-width': 1 }));
+      var tx = sv('text', { x: m.l - 8, y: y + 4, 'text-anchor': 'end', 'class': 'tick' });
+      if (isLog) { tx.appendChild(document.createTextNode('10')); tx.appendChild(sv('tspan', { dy: -5, 'font-size': 9 }, String(t.e))); }
+      else tx.textContent = fmtNum(t.v);
+      svg.appendChild(tx);
+    });
+    svg.appendChild(sv('line', { x1: m.l, x2: m.l + pw, y1: m.t + ph, y2: m.t + ph, stroke: 'var(--axis)', 'stroke-width': 1 }));
+    linTicks(xmin, xmax, big ? 8 : 5).forEach(function (v) {
+      var x = sx(v);
+      if (x < m.l - 1 || x > m.l + pw + 1) return;
+      svg.appendChild(sv('line', { x1: x, x2: x, y1: m.t + ph, y2: m.t + ph + 4, stroke: 'var(--axis)', 'stroke-width': 1 }));
+      svg.appendChild(sv('text', { x: x, y: m.t + ph + 17, 'text-anchor': 'middle', 'class': 'tick' }, fmtNum(v)));
+    });
+    if (spec.xlabel) svg.appendChild(sv('text', { x: m.l + pw / 2, y: H - 4, 'text-anchor': 'middle', 'class': 'axtitle' }, spec.xlabel));
+    if (spec.ylabel) svg.appendChild(sv('text', { transform: 'translate(12,' + (m.t + ph / 2) + ') rotate(-90)', 'text-anchor': 'middle', 'class': 'axtitle' }, spec.ylabel));
+    (spec.vlines || []).forEach(function (v) {
+      if (v < xmin || v > xmax) return;
+      svg.appendChild(sv('line', { x1: sx(v), x2: sx(v), y1: m.t, y2: m.t + ph, stroke: 'var(--axis)', 'stroke-width': 1, opacity: .55 }));
+    });
+
+    // ---- marks ----
+    var ends = [];
+    series.forEach(function (s, si) {
+      var col = 'var(--' + s.color + ')';
+      var d = '', first = true;
+      s.pts.forEach(function (p) {
+        if (!isFinite(p[1]) || (isLog && p[1] <= 0)) return;
+        d += (first ? 'M' : 'L') + sx(p[0]).toFixed(1) + ' ' + sy(p[1]).toFixed(1); first = false;
+      });
+      if (series.length === 1 && d) {
+        var last = s.pts[s.pts.length - 1];
+        svg.appendChild(sv('path', { d: d + 'L' + sx(last[0]).toFixed(1) + ' ' + (m.t + ph) + 'L' + sx(s.pts[0][0]).toFixed(1) + ' ' + (m.t + ph) + 'Z', fill: col, opacity: .1, stroke: 'none' }));
+      }
+      svg.appendChild(sv('path', { d: d, fill: 'none', stroke: col, 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
+      s.pts.forEach(function (p) {                         // off-scale points get a marker at the edge
+        if (isFinite(p[1]) && p[1] > yhi) {
+          var x = sx(p[0]);
+          svg.appendChild(sv('path', { d: 'M' + (x - 5) + ' ' + (m.t + 9) + 'L' + x + ' ' + (m.t + 1) + 'L' + (x + 5) + ' ' + (m.t + 9) + 'Z', fill: col, stroke: 'var(--surface)', 'stroke-width': 2 }));
+        }
+      });
+      var lp = s.pts[s.pts.length - 1];
+      if (isFinite(lp[1]) && (!isLog || lp[1] > 0)) {
+        var ex = sx(lp[0]), ey = sy(lp[1]);
+        svg.appendChild(sv('circle', { cx: ex, cy: ey, r: 4, fill: col, stroke: 'var(--surface)', 'stroke-width': 2 }));
+        ends.push({ y: ey, x: ex, text: fmtNum(lp[1]) });
+      }
+    });
+    // selective direct labels: the end value, skipped when it would collide or has no room
+    var placed = [];
+    ends.sort(function (a, b) { return a.y - b.y; }).forEach(function (e) {
+      if (series.length > 4 || e.x + 8 > W - 6) return;
+      if (placed.some(function (y) { return Math.abs(y - e.y) < 13; })) return;
+      placed.push(e.y);
+      svg.appendChild(sv('text', { x: e.x + 8, y: e.y + 4, 'class': 'endlbl' }, e.text));
+    });
+
+    // ---- hover layer ----
+    var cross = sv('line', { y1: m.t, y2: m.t + ph, stroke: 'var(--ink2)', 'stroke-width': 1, opacity: 0 });
+    svg.appendChild(cross);
+    var dots = series.map(function (s) {
+      var c = sv('circle', { r: 4, fill: 'var(--' + s.color + ')', stroke: 'var(--surface)', 'stroke-width': 2, opacity: 0 });
+      svg.appendChild(c); return c;
+    });
+    var tip = h('div', 'tip'); tip.style.display = 'none'; host.appendChild(tip);
+    var base = series[0].pts;
+    function show(i) {
+      var x = base[i][0], px = sx(x);
+      cross.setAttribute('x1', px); cross.setAttribute('x2', px); cross.setAttribute('opacity', .6);
+      tip.textContent = '';
+      tip.appendChild(h('div', 't', (spec.xname || 'x') + ' ' + fmtNum(x)));
+      series.forEach(function (s, si) {
+        var j = nearest(s.pts, x), p = s.pts[j], row = h('div', 'r');
+        var key = h('i'); key.style.setProperty('--c', 'var(--' + s.color + ')');
+        var off = isFinite(p[1]) && p[1] > yhi;
+        row.appendChild(key); row.appendChild(h('b', '', fmtNum(p[1]) + (off ? ' (off scale)' : ''))); row.appendChild(h('span', '', s.name));
+        tip.appendChild(row);
+        dots[si].setAttribute('cx', sx(p[0])); dots[si].setAttribute('cy', sy(p[1])); dots[si].setAttribute('opacity', isFinite(p[1]) ? 1 : 0);
+      });
+      tip.style.display = 'block';
+      var tw = tip.offsetWidth, th = tip.offsetHeight;
+      tip.style.left = Math.max(4, Math.min(W - tw - 4, px + 14 > W - tw - 4 ? px - tw - 14 : px + 14)) + 'px';
+      tip.style.top = Math.max(4, m.t + 6) + 'px';
+      if (th > H - 8) tip.style.top = '4px';
+      host.__idx = i;
+    }
+    function hide() { cross.setAttribute('opacity', 0); dots.forEach(function (d) { d.setAttribute('opacity', 0); }); tip.style.display = 'none'; }
+    svg.addEventListener('pointermove', function (ev) {
+      var r = svg.getBoundingClientRect(), x = xmin + ((ev.clientX - r.left) - m.l) / pw * (xmax - xmin);
+      show(nearest(base, x));
+    });
+    svg.addEventListener('pointerleave', hide);
+    if (big) {
+      host.onkeydown = function (ev) {
+        if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') return;
+        ev.preventDefault();
+        var i = host.__idx == null ? base.length - 1 : host.__idx;
+        show(Math.max(0, Math.min(base.length - 1, i + (ev.key === 'ArrowLeft' ? -1 : 1))));
+      };
+    }
+  }
+
+  function legendInto(box, spec) {
+    box.textContent = '';
+    var ss = (spec.series || []).filter(function (s) { return s.pts && s.pts.length; });
+    if (ss.length < 2) return;                              // one series: the title names it
+    ss.forEach(function (s) {
+      var it = h('span'); var k = h('span', 'key'); k.style.setProperty('--c', 'var(--' + s.color + ')');
+      it.appendChild(k); it.appendChild(document.createTextNode(s.name)); box.appendChild(it);
+    });
+  }
+
+  /* ---- panels ---- */
+  var panels = {};
+  function ensurePanels() {
+    var box = $('#plots');
+    (S.charts || []).forEach(function (c) {
+      var p = panels[c.id];
+      if (!p) {
+        var sec = h('section', 'panel');
+        var head = h('header'); var title = h('h3'); var btn = h('button', 'iconbtn', '⤢');
+        btn.type = 'button'; btn.title = 'Open larger'; btn.setAttribute('aria-label', 'Open larger');
+        head.appendChild(title); head.appendChild(btn);
+        var hint = h('p', 'hint'), leg = h('div', 'legend'), plot = h('div', 'plot');
+        sec.appendChild(head); sec.appendChild(hint); sec.appendChild(leg); sec.appendChild(plot);
+        box.appendChild(sec);
+        p = panels[c.id] = { id: c.id, title: title, hint: hint, leg: leg, plot: plot };
+        var open = function () { openModal(c.id); };
+        btn.addEventListener('click', open);
+        plot.addEventListener('click', open);
+        if (window.ResizeObserver) new ResizeObserver(function () { drawChart(plot, false); }).observe(plot);
+      }
+      p.title.textContent = c.title; p.hint.textContent = c.hint || '';
+      p.plot.__spec = c; legendInto(p.leg, c); drawChart(p.plot, false);
+    });
+  }
+  function specById(id) { return (S.charts || []).filter(function (c) { return c.id === id; })[0]; }
+
+  /* ---- modal ---- */
+  var modalId = null, lastFocus = null;
+  function rowsOf(spec) {
+    var ss = spec.series.filter(function (s) { return s.pts.length; });
+    if (!ss.length) return { head: [], rows: [] };
+    var head = [spec.xname || 'x'].concat(ss.map(function (s) { return s.name; }));
+    var rows = ss[0].pts.map(function (p, i) {
+      return [p[0]].concat(ss.map(function (s) { var j = nearest(s.pts, p[0]); return s.pts[j][1]; }));
+    });
+    return { head: head, rows: rows };
+  }
+  function renderModal() {
+    var spec = specById(modalId); if (!spec) return;
+    $('#modal-title').textContent = spec.title; $('#modal-hint').textContent = spec.hint || '';
+    legendInto($('#modal-legend'), spec);
+    var plot = $('#modal-plot'); plot.__spec = spec; drawChart(plot, true);
+    var tw = $('#modal-table');
+    if (!tw.hidden) {
+      var d = rowsOf(spec), step = Math.max(1, Math.ceil(d.rows.length / 300));
+      tw.textContent = '';
+      var t = h('table'), th = h('tr');
+      d.head.forEach(function (x) { th.appendChild(h('th', '', x)); }); t.appendChild(th);
+      d.rows.forEach(function (r, i) {
+        if (i % step && i !== d.rows.length - 1) return;
+        var tr = h('tr'); r.forEach(function (v) { tr.appendChild(h('td', '', fmtNum(v))); }); t.appendChild(tr);
+      });
+      tw.appendChild(t);
+    }
+  }
+  function openModal(id) {
+    modalId = id; lastFocus = document.activeElement;
+    $('#modal-table').hidden = true;
+    $('#modal').hidden = false; document.body.classList.add('noscroll');
+    renderModal(); $('#m-close').focus();
+  }
+  function closeModal() {
+    $('#modal').hidden = true; document.body.classList.remove('noscroll'); modalId = null;
+    if (lastFocus && lastFocus.focus) lastFocus.focus();
+  }
+  $('#m-close').addEventListener('click', closeModal);
+  $('#modal').addEventListener('click', function (e) { if (e.target === this) closeModal(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && modalId) closeModal(); });
+  $('#m-table').addEventListener('click', function () { var tw = $('#modal-table'); tw.hidden = !tw.hidden; renderModal(); });
+  $('#m-csv').addEventListener('click', function () {
+    var spec = specById(modalId); if (!spec) return;
+    var d = rowsOf(spec), lines = [d.head.join(',')].concat(d.rows.map(function (r) { return r.join(','); }));
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
+    a.download = spec.id + '.csv'; document.body.appendChild(a); a.click(); a.remove();
+  });
+  if (window.ResizeObserver) new ResizeObserver(function () { if (modalId) drawChart($('#modal-plot'), true); }).observe($('#modal-plot'));
+
+  /* ================= status -> DOM ================= */
+  function fact(l, v, s) {
+    var e = h('div', 'fact'); e.appendChild(h('div', 'l', l)); e.appendChild(h('div', 'v', v));
+    if (s) e.appendChild(h('div', 's', s)); return e;
+  }
+  function applyStatus() {
+    if (!S) return;
+    $('#run-title').textContent = S.run || 'COMSOL run';
+    $('#run-file').textContent = S.log || '';
+
+    var f = $('#facts'); f.textContent = '';
+    var sim = S.sim || {}, mesh = S.mesh || {}, work = S.work || {}, mem = S.memory || {};
+    f.appendChild(fact('Simulation time', sim.time != null ? fmtNum(sim.time) + ' s' : '–',
+      sim.time != null && S.t_end ? ((sim.time - (S.t_start || 0)) / (S.t_end - (S.t_start || 0)) * 100).toFixed(1) + ' % of ' + fmtNum(S.t_end) + ' s' : ''));
+    f.appendChild(fact('Time step', sim.step != null ? fmtInt(sim.step) : '–', sim.dt != null ? 'step size ' + fmtNum(sim.dt) + ' s' : ''));
+    f.appendChild(fact('Mesh', mesh.dofs ? fmtInt(mesh.dofs) + ' DOFs' : '–',
+      (mesh.internal ? '+' + fmtInt(mesh.internal) + ' internal' : '') + (mesh.interval ? (mesh.internal ? ', ' : '') + 'time interval ' + mesh.interval : '')));
+    f.appendChild(fact('Memory', mem.phys != null ? (mem.phys >= 1024 ? (mem.phys / 1024).toFixed(1) + ' GB' : fmtInt(mem.phys) + ' MB') : '–',
+      mem.virt != null ? 'virtual ' + (mem.virt >= 1024 ? (mem.virt / 1024).toFixed(1) + ' GB' : fmtInt(mem.virt) + ' MB') : ''));
+    f.appendChild(fact('Solver work', work.assemblies != null ? fmtInt(work.assemblies) + ' assemblies' : '–',
+      work.factorizations != null ? fmtInt(work.factorizations) + ' factorizations' : ''));
+    f.appendChild(fact('Failed steps', sim.tfail != null ? 'Tfail ' + fmtNum(sim.tfail) : '–', sim.nlfail != null ? 'NLfail ' + fmtNum(sim.nlfail) : ''));
+
+    var ul = $('#steps'); ul.textContent = '';
+    (S.sections || []).forEach(function (sec) {
+      var li = h('li'); var mk = h('span', 'mark ' + (sec.status === 'finished' ? 'ok' : 'run'), sec.status === 'finished' ? '✓' : '●');
+      mk.setAttribute('aria-label', sec.status);
+      li.appendChild(mk); li.appendChild(h('span', 'nm', sec.name));
+      li.appendChild(h('span', 'tm', sec.status === 'finished' ? (sec.ended || '') : (sec.started ? 'since ' + sec.started : 'running')));
+      ul.appendChild(li);
+    });
+    if (!(S.sections || []).length) ul.appendChild(h('li', '', 'Nothing in the log yet'));
+
+    ensurePanels();
+    if (modalId) renderModal();
+    tick();
+  }
+
+  /* ================= the clock: ticks every second, anchored to absolute times ================= */
+  function effectiveState(now) {
+    if (!S) return 'run';
+    var st = S.state;
+    if (st === 'run' && S.last_write && S.stall_min && now - S.last_write > S.stall_min * 60) return 'warn';
+    return st;
+  }
+  function tick() {
+    var now = Date.now() / 1000;
+    if (!S) { $('#pill-text').textContent = 'Waiting for data'; return; }
+    var st = effectiveState(now), live = st === 'run' || st === 'warn';
+    var pill = $('#pill'); pill.setAttribute('data-state', st);
+    $('.ic', pill).textContent = STATE[st].icon;
+    $('#pill-text').textContent = st === 'bad' || st === 'warn' ? (S.state_text || STATE[st].label) : STATE[st].label;
+    pill.title = S.state_text || '';
+    $('#bar').setAttribute('data-state', st);
+
+    var elapsed = null;
+    if (S.start) elapsed = (live ? now : (S.end || S.generated_at)) - S.start;
+    if (st === 'ok' && S.total_s != null) elapsed = S.total_s;
+
+    var lbl = $('#clock-label'), val = $('#clock-value'), sub = $('#clock-sub'), eta = S.eta || {};
+    val.classList.remove('dim');
+    if (st === 'ok') {
+      lbl.textContent = 'Finished'; val.textContent = elapsed != null ? hms(elapsed) : '–'; sub.textContent = 'Total run time';
+    } else if (st === 'bad') {
+      lbl.textContent = 'Stopped after'; val.textContent = elapsed != null ? hms(elapsed) : '–'; sub.textContent = '';
+    } else if (eta.finish) {
+      var rem = eta.finish - now;
+      sub.textContent = '';
+      if (rem >= 0) { lbl.textContent = 'Remaining'; val.textContent = hms(rem); sub.appendChild(document.createTextNode('Finishes about ' + fmtDate(eta.finish))); }
+      else { lbl.textContent = 'Past the estimate by'; val.textContent = hms(-rem); sub.appendChild(document.createTextNode('Still running; the estimate adjusts itself.')); }
+      if (eta.basis) { var sm = h('small', '', '  (rough, from ' + eta.basis + ')'); sub.appendChild(sm); }
+    } else {
+      lbl.textContent = 'Remaining'; val.textContent = '–:––:––'; val.classList.add('dim');
+      sub.textContent = 'Shown once progress has moved a little.';
+    }
+
+    var pct = S.pct_exact != null ? S.pct_exact : S.pct;
+    $('#pct-num').textContent = String(Math.floor(pct));
+    $('#pct-exact').textContent = S.pct_exact != null ? pct.toFixed(2) + ' % by simulation time' : 'whole percent from the log';
+    $('#bar-fill').style.width = Math.max(0, Math.min(100, pct)) + '%';
+    $('#bar').setAttribute('aria-valuenow', Math.round(pct));
+    $('#rt-elapsed').textContent = elapsed != null ? hms(elapsed) : '–';
+    $('#rt-log').textContent = S.last_write ? (live ? ago(now - S.last_write) + ' ago' : 'final') : '–';
+    $('#rt-activity').textContent = S.activity || '–';
+
+    // alerts: stale data, lost connection, error found in the log
+    var al = $('#alerts'); al.textContent = '';
+    function alert(kind, title, text) {
+      var a = h('div', 'alert'); a.setAttribute('data-kind', kind);
+      a.appendChild(h('b', '', title)); a.appendChild(h('span', '', text)); al.appendChild(a);
+    }
+    if (S.error) alert('bad', 'Error in the log.', S.error);
+    if (live && S.stale_after_s && now - S.generated_at > S.stale_after_s)
+      alert('warn', 'Data is ' + ago(now - S.generated_at) + ' old.', 'The monitor may have stopped, or the computer is off or offline. The clock keeps counting from the last estimate.');
+    if (failedPolls >= 3) alert('warn', 'Cannot load new data.', 'Showing the last update. Retrying.');
+    if (st === 'warn') alert('warn', 'No log activity for ' + ago(now - S.last_write) + '.', 'The solver may be stuck, or COMSOL has stopped.');
+
+    $('#foot').textContent = 'Data generated ' + new Date(S.generated_at * 1000).toLocaleTimeString() + ', ' + ago(now - S.generated_at) + ' ago.';
+    var rem2 = (eta.finish && live) ? ' · ' + hms(Math.max(0, eta.finish - now)) + ' left' : '';
+    document.title = Math.floor(pct) + ' %' + rem2 + ' – ' + (S.run || 'COMSOL monitor');
+  }
+
+  /* ================= polling: new status.js, then re-anchor ================= */
+  function poll() {
+    var s = document.createElement('script');
+    s.src = 'status.js?t=' + Date.now();
+    s.onload = function () { s.remove(); failedPolls = 0; if (window.__STATUS) { S = window.__STATUS; applyStatus(); } schedule(); };
+    s.onerror = function () { s.remove(); failedPolls++; tick(); schedule(); };
+    document.head.appendChild(s);
+  }
+  function schedule() { setTimeout(poll, Math.max(2, (S && S.poll_s) || 5) * 1000); }
+
+  /* ================= theme ================= */
+  var saved = storeGet('monitor-theme');
+  if (saved === 'light' || saved === 'dark') document.documentElement.setAttribute('data-theme', saved);
+  $('#theme').addEventListener('click', function () {
+    var cur = document.documentElement.getAttribute('data-theme') ||
+      (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    var next = cur === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next); storeSet('monitor-theme', next);
+    Object.keys(panels).forEach(function (k) { drawChart(panels[k].plot, false); });
+    if (modalId) renderModal();
+  });
+
+  applyStatus();
+  setInterval(tick, 1000);
+  schedule();
+})();
+</script>
+</body>
+</html>
