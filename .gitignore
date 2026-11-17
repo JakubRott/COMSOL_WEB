@@ -1,0 +1,6 @@
+monitor.log
+publish.log
+publish_stop.txt
+convergence_history.json
+*.tmp
+*.tmp.png
